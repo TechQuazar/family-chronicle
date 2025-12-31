@@ -9,9 +9,10 @@ interface BudNodeProps {
   y: number;
   isSelected: boolean;
   onClick: () => void;
+  hasSpouse?: boolean;
 }
 
-export default function BudNode({ bud, x, y, isSelected, onClick }: BudNodeProps) {
+export default function BudNode({ bud, x, y, isSelected, onClick, hasSpouse }: BudNodeProps) {
   // Get initials from name
   const initials = bud.name
     .split(' ')

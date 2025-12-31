@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import type { Bud, BudConnection } from '@/types/models';
 import BudNode from './BudNode';
+import VineConnection from './VineConnection';
 
 interface TreeCanvasProps {
   buds: Bud[];
@@ -16,6 +17,8 @@ interface LayoutNode {
   x: number;
   y: number;
   level: number;
+  isSpouse?: boolean;
+  spouseId?: string;
 }
 
 export default function TreeCanvas({ buds, connections, onBudClick, selectedBudId }: TreeCanvasProps) {
@@ -24,14 +27,49 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
   const [scale, setScale] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [spacePressed, setSpacePressed] = useState(false);
 
-  // Auto-layout calculation using hierarchical tree layout
+  // Track space key for Figma-style panning
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault();
+        setSpacePressed(true);
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpacePressed(false);
+        setIsDragging(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  // Build spouse pairs map
+  const spousePairs = useMemo(() => {
+    const pairs = new Map<string, string>();
+    connections.forEach(conn => {
+      if (conn.relationshipType === 'spouse') {
+        pairs.set(conn.fromBudId, conn.toBudId);
+        pairs.set(conn.toBudId, conn.fromBudId);
+      }
+    });
+    return pairs;
+  }, [connections]);
+
+  // Auto-layout calculation using hierarchical tree layout with spouse handling
   const layoutNodes = useMemo(() => {
     if (buds.length === 0) return [];
 
-    // Build adjacency map
+    // Build adjacency maps
     const childrenMap = new Map<string, string[]>();
-    const parentMap = new Map<string, string>();
+    const parentMap = new Map<string, string[]>();
     
     connections.forEach(conn => {
       if (conn.relationshipType === 'parent') {
@@ -40,19 +78,30 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
           childrenMap.set(conn.fromBudId, []);
         }
         childrenMap.get(conn.fromBudId)!.push(conn.toBudId);
-        parentMap.set(conn.toBudId, conn.fromBudId);
+        
+        if (!parentMap.has(conn.toBudId)) {
+          parentMap.set(conn.toBudId, []);
+        }
+        parentMap.get(conn.toBudId)!.push(conn.fromBudId);
       } else if (conn.relationshipType === 'child') {
         // fromBud is child of toBud
         if (!childrenMap.has(conn.toBudId)) {
           childrenMap.set(conn.toBudId, []);
         }
         childrenMap.get(conn.toBudId)!.push(conn.fromBudId);
-        parentMap.set(conn.fromBudId, conn.toBudId);
+        
+        if (!parentMap.has(conn.fromBudId)) {
+          parentMap.set(conn.fromBudId, []);
+        }
+        parentMap.get(conn.fromBudId)!.push(conn.toBudId);
       }
     });
 
-    // Find root nodes (no parents)
-    const roots = buds.filter(bud => !parentMap.has(bud.id));
+    // Find root nodes (no parents, excluding spouses of roots)
+    const roots = buds.filter(bud => {
+      const parents = parentMap.get(bud.id) || [];
+      return parents.length === 0;
+    });
     
     // If no clear roots, use first bud
     if (roots.length === 0 && buds.length > 0) {
@@ -63,7 +112,8 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
     const NODE_WIDTH = 140;
     const NODE_HEIGHT = 80;
     const HORIZONTAL_SPACING = 40;
-    const VERTICAL_SPACING = 100;
+    const VERTICAL_SPACING = 120;
+    const SPOUSE_GAP = 30; // Smaller gap between spouses
 
     const layoutResult: LayoutNode[] = [];
     const positioned = new Set<string>();
@@ -75,18 +125,54 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
       
       positioned.add(nodeId);
       
-      const children = childrenMap.get(nodeId) || [];
-      const unpositionedChildren = children.filter(id => !positioned.has(id));
+      // Check for spouse
+      const spouseId = spousePairs.get(nodeId);
+      const spouse = spouseId ? buds.find(b => b.id === spouseId) : null;
+      const hasUnpositionedSpouse = spouse && !positioned.has(spouseId);
+      
+      // Get all children (from this node and spouse)
+      let allChildren: string[] = [...(childrenMap.get(nodeId) || [])];
+      if (spouseId) {
+        const spouseChildren = childrenMap.get(spouseId) || [];
+        spouseChildren.forEach(childId => {
+          if (!allChildren.includes(childId)) {
+            allChildren.push(childId);
+          }
+        });
+      }
+      
+      const unpositionedChildren = allChildren.filter(id => !positioned.has(id));
       
       if (unpositionedChildren.length === 0) {
-        // Leaf node
-        layoutResult.push({
-          bud,
-          x: xOffset,
-          y: level * (NODE_HEIGHT + VERTICAL_SPACING),
-          level,
-        });
-        return xOffset + NODE_WIDTH + HORIZONTAL_SPACING;
+        // Leaf node (with possible spouse)
+        if (hasUnpositionedSpouse) {
+          positioned.add(spouseId);
+          layoutResult.push({
+            bud,
+            x: xOffset,
+            y: level * (NODE_HEIGHT + VERTICAL_SPACING),
+            level,
+            isSpouse: true,
+            spouseId,
+          });
+          layoutResult.push({
+            bud: spouse,
+            x: xOffset + NODE_WIDTH + SPOUSE_GAP,
+            y: level * (NODE_HEIGHT + VERTICAL_SPACING),
+            level,
+            isSpouse: true,
+            spouseId: nodeId,
+          });
+          return xOffset + (NODE_WIDTH * 2) + SPOUSE_GAP + HORIZONTAL_SPACING;
+        } else {
+          layoutResult.push({
+            bud,
+            x: xOffset,
+            y: level * (NODE_HEIGHT + VERTICAL_SPACING),
+            level,
+          });
+          return xOffset + NODE_WIDTH + HORIZONTAL_SPACING;
+        }
       }
       
       // Layout children first
@@ -102,17 +188,42 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
         }
       });
       
-      // Position parent centered above children
+      // Position parent (and spouse) centered above children
       const minChildX = Math.min(...childXPositions);
       const maxChildX = Math.max(...childXPositions);
-      const parentX = (minChildX + maxChildX) / 2;
       
-      layoutResult.push({
-        bud,
-        x: parentX,
-        y: level * (NODE_HEIGHT + VERTICAL_SPACING),
-        level,
-      });
+      if (hasUnpositionedSpouse) {
+        positioned.add(spouseId);
+        // Center the spouse pair above children
+        const pairWidth = (NODE_WIDTH * 2) + SPOUSE_GAP;
+        const centerX = (minChildX + maxChildX + NODE_WIDTH) / 2;
+        const pairStartX = centerX - pairWidth / 2;
+        
+        layoutResult.push({
+          bud,
+          x: pairStartX,
+          y: level * (NODE_HEIGHT + VERTICAL_SPACING),
+          level,
+          isSpouse: true,
+          spouseId,
+        });
+        layoutResult.push({
+          bud: spouse,
+          x: pairStartX + NODE_WIDTH + SPOUSE_GAP,
+          y: level * (NODE_HEIGHT + VERTICAL_SPACING),
+          level,
+          isSpouse: true,
+          spouseId: nodeId,
+        });
+      } else {
+        const parentX = (minChildX + maxChildX) / 2;
+        layoutResult.push({
+          bud,
+          x: parentX,
+          y: level * (NODE_HEIGHT + VERTICAL_SPACING),
+          level,
+        });
+      }
       
       return currentX;
     }
@@ -138,7 +249,7 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
     });
 
     return layoutResult;
-  }, [buds, connections]);
+  }, [buds, connections, spousePairs]);
 
   // Center the view on initial load
   useEffect(() => {
@@ -159,9 +270,10 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
     }
   }, [layoutNodes.length]);
 
-  // Mouse event handlers for panning
+  // Mouse event handlers for panning (only when space is pressed or touch)
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return; // Only left click
+    if (!spacePressed) return; // Only pan when space is pressed
     setIsDragging(true);
     setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
   };
@@ -178,7 +290,7 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
     setIsDragging(false);
   };
 
-  // Touch event handlers for mobile
+  // Touch event handlers for mobile (always pan on touch)
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 1) {
       const touch = e.touches[0];
@@ -208,41 +320,52 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
     setScale(newScale);
   };
 
-  // Get connection lines
-  const connectionLines = useMemo(() => {
-    return connections.map(conn => {
+  // Build connection visuals with vine styles
+  const vineConnections = useMemo(() => {
+    const result: Array<{
+      id: string;
+      fromX: number;
+      fromY: number;
+      toX: number;
+      toY: number;
+      type: 'spouse' | 'parent-child' | 'sibling';
+    }> = [];
+
+    connections.forEach(conn => {
       const fromNode = layoutNodes.find(n => n.bud.id === conn.fromBudId);
       const toNode = layoutNodes.find(n => n.bud.id === conn.toBudId);
       
-      if (!fromNode || !toNode) return null;
+      if (!fromNode || !toNode) return;
       
       const fromX = fromNode.x + 70; // Center of node
       const fromY = fromNode.y + 40;
       const toX = toNode.x + 70;
       const toY = toNode.y + 40;
       
-      // Create a curved path
-      const midY = (fromY + toY) / 2;
-      const path = `M ${fromX} ${fromY} C ${fromX} ${midY}, ${toX} ${midY}, ${toX} ${toY}`;
-      
-      return (
-        <path
-          key={conn.id}
-          d={path}
-          fill="none"
-          stroke="hsl(var(--connection))"
-          strokeWidth={2}
-          strokeLinecap="round"
-          opacity={0.6}
-        />
-      );
-    }).filter(Boolean);
+      let type: 'spouse' | 'parent-child' | 'sibling' = 'parent-child';
+      if (conn.relationshipType === 'spouse') {
+        type = 'spouse';
+      } else if (conn.relationshipType === 'sibling') {
+        type = 'sibling';
+      }
+
+      result.push({
+        id: conn.id,
+        fromX,
+        fromY,
+        toX,
+        toY,
+        type,
+      });
+    });
+
+    return result;
   }, [connections, layoutNodes]);
 
   return (
     <div
       ref={containerRef}
-      className="w-full h-full cursor-grab active:cursor-grabbing"
+      className={`w-full h-full transition-cursor ${spacePressed ? 'cursor-grab' : 'cursor-default'} ${isDragging ? 'cursor-grabbing' : ''}`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -252,6 +375,11 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
       onTouchEnd={handleTouchEnd}
       onWheel={handleWheel}
     >
+      {/* Hint for space+drag */}
+      <div className="absolute bottom-4 left-4 text-xs text-muted-foreground bg-card/80 backdrop-blur-sm px-3 py-1.5 rounded-full border border-border/50 z-10">
+        Hold <kbd className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono mx-1">Space</kbd> + drag to pan
+      </div>
+
       <div
         className="relative"
         style={{
@@ -259,7 +387,7 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
           transformOrigin: '0 0',
         }}
       >
-        {/* Connection lines SVG */}
+        {/* Connection vines SVG */}
         <svg
           className="absolute pointer-events-none"
           style={{
@@ -268,7 +396,30 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
             overflow: 'visible',
           }}
         >
-          {connectionLines}
+          <defs>
+            {/* Gradient for vines */}
+            <linearGradient id="vineGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="hsl(var(--branch))" stopOpacity="0.8" />
+              <stop offset="100%" stopColor="hsl(var(--bud))" stopOpacity="0.6" />
+            </linearGradient>
+            {/* Heart gradient for spouse connection */}
+            <linearGradient id="spouseGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.8" />
+              <stop offset="50%" stopColor="hsl(350 80% 60%)" stopOpacity="1" />
+              <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0.8" />
+            </linearGradient>
+          </defs>
+          
+          {vineConnections.map(conn => (
+            <VineConnection
+              key={conn.id}
+              fromX={conn.fromX}
+              fromY={conn.fromY}
+              toX={conn.toX}
+              toY={conn.toY}
+              type={conn.type}
+            />
+          ))}
         </svg>
 
         {/* Bud nodes */}
@@ -280,6 +431,7 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
             y={node.y}
             isSelected={node.bud.id === selectedBudId}
             onClick={() => onBudClick(node.bud.id)}
+            hasSpouse={!!node.spouseId}
           />
         ))}
       </div>

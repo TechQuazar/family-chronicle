@@ -31,6 +31,28 @@ export default function TreeView() {
   // New bud connection state
   const [connectToBudId, setConnectToBudId] = useState<string>('');
   const [relationshipType, setRelationshipType] = useState<string>('');
+  const [secondParentId, setSecondParentId] = useState<string>('');
+
+  // Helper to check if two buds are spouses
+  const isSpouseOf = (budId1: string, budId2: string): boolean => {
+    return connections.some(
+      conn => conn.relationshipType === 'spouse' && 
+      ((conn.fromBudId === budId1 && conn.toBudId === budId2) ||
+       (conn.fromBudId === budId2 && conn.toBudId === budId1))
+    );
+  };
+
+  // Get possible second parents (spouses first, then other buds)
+  const getSpouseOptions = (firstParentId: string): Bud[] => {
+    const spouse = buds.find(bud => 
+      bud.id !== firstParentId && isSpouseOf(bud.id, firstParentId)
+    );
+    const otherBuds = buds.filter(bud => 
+      bud.id !== firstParentId && (!spouse || bud.id !== spouse.id)
+    );
+    // Put spouse first if exists
+    return spouse ? [spouse, ...otherBuds] : otherBuds;
+  };
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -97,6 +119,16 @@ export default function TreeView() {
           toBudId: connectToBudId,
           relationshipType: relationshipType as BudConnection['relationshipType'],
         });
+
+        // If child has a second parent, create that connection too
+        if (relationshipType === 'child' && secondParentId && secondParentId !== 'none') {
+          await adapter.connections.createConnection({
+            familyId,
+            fromBudId: newBud.id,
+            toBudId: secondParentId,
+            relationshipType: 'child',
+          });
+        }
       }
 
       // Reload data to get updated connections
@@ -105,6 +137,7 @@ export default function TreeView() {
       setNewBudName('');
       setConnectToBudId('');
       setRelationshipType('');
+      setSecondParentId('');
       setDialogOpen(false);
       toast({ title: 'Bud created!', description: `${newBud.name} has been added to the tree.` });
     }
@@ -166,35 +199,66 @@ export default function TreeView() {
                 {buds.length > 0 && (
                   <>
                     <div className="space-y-2">
-                      <Label htmlFor="connectTo">Connect to (optional)</Label>
-                      <Select value={connectToBudId} onValueChange={setConnectToBudId}>
+                      <Label htmlFor="relationship">Relationship</Label>
+                      <Select value={relationshipType} onValueChange={(val) => {
+                        setRelationshipType(val);
+                        setConnectToBudId('');
+                        setSecondParentId('');
+                      }}>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select a family member" />
+                          <SelectValue placeholder="How is this person related?" />
                         </SelectTrigger>
                         <SelectContent>
-                          {buds.map((bud) => (
-                            <SelectItem key={bud.id} value={bud.id}>
-                              {bud.name}
-                            </SelectItem>
-                          ))}
+                          <SelectItem value="parent">Is a parent</SelectItem>
+                          <SelectItem value="child">Is a child</SelectItem>
+                          <SelectItem value="spouse">Is a spouse</SelectItem>
+                          <SelectItem value="sibling">Is a sibling</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
 
-                    {connectToBudId && (
+                    {relationshipType && (
                       <div className="space-y-2">
-                        <Label htmlFor="relationship">Relationship</Label>
-                        <Select value={relationshipType} onValueChange={setRelationshipType}>
+                        <Label htmlFor="connectTo">
+                          {relationshipType === 'child' ? 'Select parent(s)' : 
+                           relationshipType === 'parent' ? 'Select child' :
+                           relationshipType === 'spouse' ? 'Select spouse' : 'Select sibling'}
+                        </Label>
+                        <Select value={connectToBudId} onValueChange={setConnectToBudId}>
                           <SelectTrigger>
-                            <SelectValue placeholder="How are they related?" />
+                            <SelectValue placeholder="Select a family member" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="parent">Parent of</SelectItem>
-                            <SelectItem value="child">Child of</SelectItem>
-                            <SelectItem value="spouse">Spouse of</SelectItem>
-                            <SelectItem value="sibling">Sibling of</SelectItem>
+                            {buds.map((bud) => (
+                              <SelectItem key={bud.id} value={bud.id}>
+                                {bud.name}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
+                      </div>
+                    )}
+
+                    {/* Second parent selection for children */}
+                    {relationshipType === 'child' && connectToBudId && (
+                      <div className="space-y-2">
+                        <Label htmlFor="secondParent">Second parent (optional)</Label>
+                        <Select value={secondParentId} onValueChange={setSecondParentId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select second parent" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">No second parent</SelectItem>
+                            {getSpouseOptions(connectToBudId).map((bud) => (
+                              <SelectItem key={bud.id} value={bud.id}>
+                                {bud.name} {isSpouseOf(bud.id, connectToBudId) ? '(spouse)' : ''}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          Select if this child has two parents in the tree
+                        </p>
                       </div>
                     )}
                   </>
