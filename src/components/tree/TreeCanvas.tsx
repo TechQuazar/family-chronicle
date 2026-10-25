@@ -31,14 +31,26 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
 
   // Track space key for Figma-style panning
   useEffect(() => {
+    // Never hijack Space while the user is typing or editing a field —
+    // otherwise names like "John Smith" can't be entered in dialogs.
+    const isEditingTarget = (e: KeyboardEvent): boolean => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return false;
+      return (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      );
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
+      if (e.code === 'Space' && !e.repeat && !isEditingTarget(e)) {
         e.preventDefault();
         setSpacePressed(true);
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
+      if (e.code === 'Space' && !isEditingTarget(e)) {
         setSpacePressed(false);
         setIsDragging(false);
       }
@@ -131,7 +143,7 @@ export default function TreeCanvas({ buds, connections, onBudClick, selectedBudI
       const hasUnpositionedSpouse = spouse && !positioned.has(spouseId);
       
       // Get all children (from this node and spouse)
-      let allChildren: string[] = [...(childrenMap.get(nodeId) || [])];
+      const allChildren: string[] = [...(childrenMap.get(nodeId) || [])];
       if (spouseId) {
         const spouseChildren = childrenMap.get(spouseId) || [];
         spouseChildren.forEach(childId => {
