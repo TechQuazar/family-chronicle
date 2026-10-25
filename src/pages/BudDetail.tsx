@@ -7,9 +7,12 @@ import { getAdapter } from '@/adapters';
 import type { Bud, MessageToFuture, DiaryEntry } from '@/types/models';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, MessageCircle, BookHeart, Send, Leaf, Calendar } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { ArrowLeft, MessageCircle, BookHeart, Send, Leaf, Calendar, Pencil } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { format } from 'date-fns';
 
@@ -26,6 +29,14 @@ export default function BudDetail() {
   const [newMessage, setNewMessage] = useState('');
   const [newDiaryEntry, setNewDiaryEntry] = useState('');
   const [isSending, setIsSending] = useState(false);
+
+  // Edit-bud form state
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [editBirthDate, setEditBirthDate] = useState('');
+  const [editDeathDate, setEditDeathDate] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -60,6 +71,50 @@ export default function BudDetail() {
     setMessages(messagesRes.data || []);
     setDiaryEntries(diaryRes.data || []);
     setIsLoading(false);
+  };
+
+  const toDateInputValue = (date?: Date): string => {
+    if (!date) return '';
+    const d = new Date(date);
+    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+  };
+
+  const openEditDialog = () => {
+    if (!bud) return;
+    setEditName(bud.name);
+    setEditBio(bud.bio || '');
+    setEditBirthDate(toDateInputValue(bud.birthDate));
+    setEditDeathDate(toDateInputValue(bud.deathDate));
+    setEditOpen(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!budId || !editName.trim()) return;
+
+    if (editBirthDate && editDeathDate && editDeathDate < editBirthDate) {
+      toast({ title: 'Invalid dates', description: 'Death date cannot be before birth date.', variant: 'destructive' });
+      return;
+    }
+
+    setIsSavingEdit(true);
+    const adapter = getAdapter();
+
+    const { data, error } = await adapter.buds.updateBud(budId, {
+      name: editName.trim(),
+      bio: editBio.trim() || undefined,
+      birthDate: editBirthDate ? new Date(editBirthDate) : undefined,
+      deathDate: editDeathDate ? new Date(editDeathDate) : undefined,
+    });
+
+    if (error) {
+      toast({ title: 'Failed to save changes', description: error.message, variant: 'destructive' });
+    } else if (data) {
+      setBud(data);
+      setEditOpen(false);
+      toast({ title: 'Bud updated', description: `${data.name}'s details have been saved.` });
+    }
+    setIsSavingEdit(false);
   };
 
   const handleSendMessage = async () => {
@@ -143,12 +198,77 @@ export default function BudDetail() {
           <div className="w-16 h-16 rounded-full bg-bud flex items-center justify-center text-xl font-medium text-primary-foreground">
             {initials}
           </div>
-          <div>
+          <div className="flex-1">
             <h1 className="font-display text-2xl font-semibold">{bud?.name}</h1>
+            {(bud?.birthDate || bud?.deathDate) && (
+              <p className="text-sm text-muted-foreground">
+                {bud?.birthDate ? format(new Date(bud.birthDate), 'MMMM d, yyyy') : ''}
+                {bud?.birthDate && bud?.deathDate ? ' — ' : ''}
+                {bud?.deathDate ? format(new Date(bud.deathDate), 'MMMM d, yyyy') : ''}
+              </p>
+            )}
             {bud?.bio && (
               <p className="text-muted-foreground">{bud.bio}</p>
             )}
           </div>
+          <Dialog open={editOpen} onOpenChange={setEditOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" onClick={openEditDialog}>
+                <Pencil className="w-4 h-4 mr-2" />
+                Edit
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle className="font-display text-xl">Edit Bud</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleSaveEdit} className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="editName">Name</Label>
+                  <Input
+                    id="editName"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="editBio">Bio</Label>
+                  <Textarea
+                    id="editBio"
+                    placeholder="A short biography or description..."
+                    value={editBio}
+                    onChange={(e) => setEditBio(e.target.value)}
+                    rows={3}
+                    className="resize-none"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="editBirthDate">Birth date</Label>
+                    <Input
+                      id="editBirthDate"
+                      type="date"
+                      value={editBirthDate}
+                      onChange={(e) => setEditBirthDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="editDeathDate">Death date</Label>
+                    <Input
+                      id="editDeathDate"
+                      type="date"
+                      value={editDeathDate}
+                      onChange={(e) => setEditDeathDate(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <Button type="submit" className="w-full" disabled={isSavingEdit}>
+                  {isSavingEdit ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
         </div>
 
         <Tabs defaultValue="messages" className="w-full">
