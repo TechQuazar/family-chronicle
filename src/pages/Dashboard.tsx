@@ -1,6 +1,6 @@
 // Dashboard - Main authenticated page showing family trees
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { getAdapter } from '@/adapters';
@@ -10,7 +10,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Leaf, Plus, TreeDeciduous, LogOut } from 'lucide-react';
+import { Leaf, Plus, TreeDeciduous, LogOut, Download, Upload } from 'lucide-react';
+import { backupCounts, downloadBackup, importBackup, parseBackup } from '@/lib/backup';
 import { useToast } from '@/hooks/use-toast';
 
 export default function Dashboard() {
@@ -73,6 +74,36 @@ export default function Dashboard() {
     setIsCreating(false);
   };
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExport = () => {
+    downloadBackup();
+    toast({ title: 'Backup downloaded', description: 'Keep the file somewhere safe — it is the only copy of your chronicle outside this browser.' });
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    try {
+      const backup = parseBackup(await file.text());
+      const confirmed = window.confirm(
+        `Restore this backup (${backupCounts(backup)})?\n\nThis replaces everything currently stored in this browser.`
+      );
+      if (!confirmed) return;
+      importBackup(backup);
+      await loadFamilies();
+      toast({ title: 'Backup restored', description: backupCounts(backup) });
+    } catch (err) {
+      toast({
+        title: 'Import failed',
+        description: err instanceof Error ? err.message : 'Could not read that file.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   const handleSignOut = async () => {
     await signOut();
     navigate('/auth');
@@ -103,6 +134,21 @@ export default function Dashboard() {
             <span className="text-sm text-muted-foreground hidden sm:block">
               {user?.displayName}
             </span>
+            <Button variant="ghost" size="sm" onClick={handleExport} title="Download a JSON backup of all your trees">
+              <Download className="w-4 h-4 mr-2" />
+              Backup
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()} title="Restore from a JSON backup">
+              <Upload className="w-4 h-4 mr-2" />
+              Restore
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportFile}
+            />
             <Button variant="ghost" size="sm" onClick={handleSignOut}>
               <LogOut className="w-4 h-4 mr-2" />
               Sign out
